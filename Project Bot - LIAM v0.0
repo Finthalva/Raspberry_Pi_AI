@@ -1,0 +1,263 @@
+# This is my Project Bot called LIAM, Please note that this is still being worked on so there will be many errors and bugs.
+
+import speech_recognition as sr
+import pyttsx3
+import os
+import openai
+from dotenv import load_dotenv
+import datetime
+import re
+
+load_dotenv()
+OPENAI_KEY = os.getenv('OPENAI_KEY')
+openai.api_key = ''  # Ensure you use the loaded API key
+
+def reword_text(text):
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant. Reword the text to make it unique but keep the meaning the same. Don't use too complicated words, but don't make it too simple either."},
+            {"role": "user", "content": text}
+        ]
+    )
+    reworded_text = response.choices[0].message['content'].strip()
+    return reworded_text
+
+# Initialize the TTS engine
+engine = pyttsx3.init()
+
+def SpeakText(command):
+    # Reword the text
+    reworded_command = reword_text(command)
+    
+    # Print the reworded command for debugging
+    print("LIAM:", reworded_command)
+    
+    # Use pyttsx3 to convert text to speech
+    engine.say(reworded_command)
+    engine.runAndWait()
+
+def record_text():
+    r = sr.Recognizer()  # Instantiate Recognizer
+    while True:
+        try:
+            with sr.Microphone() as source2:
+                print("Listening...")
+                r.adjust_for_ambient_noise(source2, duration=0.2)
+                audio2 = r.listen(source2)
+                MyText = r.recognize_google(audio2).lower()
+                print("You:", MyText)
+                return MyText
+        except sr.RequestError as e:
+            print("Could not request results; {0}".format(e))
+        except sr.UnknownValueError:
+            print("No input received")
+        except Exception as e:
+            print(f"An error occurred: {e}")
+
+def send_to_chatgpt(messages, model="gpt-3.5-turbo"):
+    response = openai.ChatCompletion.create(
+        model=model,
+        messages=messages,
+        max_tokens=100,
+        n=1,
+        stop=None,
+        temperature=0.5,
+    )
+    message = response.choices[0].message['content']
+    messages.append({"role": "assistant", "content": message})
+    return message
+
+def save_chat_history(file_name, user_text, ai_text):
+    with open(file_name, "a") as f:
+        f.write(f"You: {user_text}\n")
+        f.write(f"LIAM: {ai_text}\n")
+        f.write("\n")
+
+def start_new_chat():
+    SpeakText("What would you like to name this project?")
+    project_name = record_text()
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    file_name = f"Chat History/{project_name}_{timestamp}.txt"
+    os.makedirs(os.path.dirname(file_name), exist_ok=True)
+    with open(file_name, "a") as f:
+        f.write(f"Project: {project_name}\n")
+        f.write("====================\n")
+    return file_name, project_name
+
+def list_chats():
+    chat_files = [f for f in os.listdir("Chat History") if f.endswith(".txt")]
+    for idx, file_name in enumerate(chat_files):
+        print(f"{idx + 1}. {file_name}")
+    return chat_files
+
+def load_chat(file_name):
+    messages = []
+    with open(file_name, "r") as f:
+        lines = f.readlines()
+        for line in lines:
+            if line.startswith("You:") or line.startswith("LIAM:"):
+                role = "user" if line.startswith("You:") else "assistant"
+                content = line.split(": ", 1)[1].strip()
+                messages.append({"role": role, "content": content})
+    return messages
+
+def extract_number(text):
+    digit_match = re.search(r'\d+', text)
+    if digit_match:
+        return int(digit_match.group())
+    
+    word_to_digit_map = {
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10
+    }
+    
+    for word, digit in word_to_digit_map.items():
+        if word in text:
+            return digit
+    
+    return None
+
+def welcome_and_choose_action():
+    SpeakText("Would you like to continue a previous project or start a new one?")
+    response = record_text()
+    if "new" in response:
+        return "new"
+    elif "previous" in response or "continue" in response:
+        return "load"
+    else:
+        SpeakText("Sorry, I didn't catch that. Please say 'new' for a new project or 'previous' to continue.")
+        return welcome_and_choose_action()
+
+def handle_new_project():
+    SpeakText("Let's start a new project.")
+    return start_new_chat()
+
+def handle_done_with_project():
+    SpeakText("Okay, you're done with this project. Let's go back to the start.")
+    return welcome_and_choose_action()
+
+def handle_measurements():
+    SpeakText("What would you like the measurement to be used for?")
+    item = record_text()
+    SpeakText(f"What is the measurement of {item}? Please specify the unit as well.")
+    measurement = record_text()
+    
+    # Regex to extract measurement and unit
+    match = re.search(r'(\d+\.?\d*)\s*(\w+)', measurement)
+    if not match:
+        SpeakText("I did not catch the measurement correctly, could you please repeat it?")
+        measurement = record_text()
+        match = re.search(r'(\d+\.?\d*)\s*(\w+)', measurement)
+    
+    if match:
+        measurement_value = match.group(1)
+        unit = match.group(2)
+    else:
+        SpeakText("Please provide a valid measurement with a unit.")
+        measurement_value = record_text()
+        SpeakText("What is the unit?")
+        unit = record_text()
+    
+    SpeakText(f"Got it, {measurement_value} {unit} for {item}.")
+    return item, measurement_value, unit
+def find_best_match(text, options):
+    text = text.lower()
+    options = [opt.lower() for opt in options]
+    matches = [(option, len(set(option.split()) & set(text.split()))) for option in options]
+    matches.sort(key=lambda x: x[1], reverse=True)
+    return matches[0][0] if matches else None
+
+def main():
+    global selected_project
+    selected_project = None  # Initialize selected_project variable
+    
+    # Initial Greeting
+    SpeakText("Welcome back, Finn.")
+    
+    action = welcome_and_choose_action()
+    measurements = {}  # Dictionary to store measurements
+
+    if action == "new":
+        selected_project, project_name = handle_new_project()
+        messages = [{"role": "user", "content": f"This project is named {project_name}. You are a helpful assistant, called LIAM. You assist me in my projects. I am the user and my name is Finn, I like making projects based on tech. You respond short and quickly, unless I ask for the details or an explanation for things. You help me take notes, dimensions and help me keep track of my project's progression."}]
+    elif action == "load":
+        SpeakText("Here are your previous projects.")
+        print("Available Chats:")
+        chat_files = list_chats()
+        SpeakText("Please say the number of the project you want to continue or say its name.")
+        spoken_text = record_text()
+        
+        # Extract number if present
+        chat_idx = extract_number(spoken_text)
+        
+        if chat_idx is not None:
+            chat_idx -= 1  # Convert to zero-based index
+            if 0 <= chat_idx < len(chat_files):
+                selected_project = f"Chat History/{chat_files[chat_idx]}"
+                with open(selected_project, "r") as f:
+                    first_line = f.readline().strip()
+                    if first_line.startswith("Project:"):
+                        project_name = first_line.split(":", 1)[1].strip()
+                        SpeakText(f"This project is named {project_name}.")
+                messages = load_chat(selected_project)
+            else:
+                SpeakText("Invalid selection. Starting a new project instead.")
+                selected_project, project_name = handle_new_project()
+                messages = [{"role": "user", "content": f"This project is named {project_name}. You are a helpful assistant, called LIAM. You assist me in my projects. I am the user and my name is Finn, I like making projects based on tech. You respond short and quickly, unless I ask for the details or an explanation for things. You help me take notes, dimensions and help me keep track of my project's progression."}]
+        else:
+            # Match by name
+            # Adjust this part to handle filenames properly
+            project_names = []
+            for f in chat_files:
+                try:
+                    name = f.split("/")[1]
+                    project_names.append(name)
+                except IndexError:
+                    # Handle filenames that don't have a '/' character
+                    project_names.append(f)
+            
+            matched_project_name = find_best_match(spoken_text, project_names)
+            if matched_project_name:
+                selected_project = f"Chat History/{matched_project_name}"
+                with open(selected_project, "r") as f:
+                    first_line = f.readline().strip()
+                    if first_line.startswith("Project:"):
+                        project_name = first_line.split(":", 1)[1].strip()
+                        SpeakText(f"This project is named {project_name}.")
+                messages = load_chat(selected_project)
+            else:
+                SpeakText("Could not find a matching project. Starting a new project instead.")
+                selected_project, project_name = handle_new_project()
+                messages = [{"role": "user", "content": f"This project is named {project_name}. You are a helpful assistant, called LIAM. You assist me in my projects. I am the user and my name is Finn, I like making projects based on tech. You respond short and quickly, unless I ask for the details or an explanation for things. You help me take notes, dimensions and help me keep track of my project's progression."}]
+    
+    while True:
+        user_input = record_text()
+        
+        if "done" in user_input:
+            handle_done_with_project()
+            break
+        
+        if "measure" in user_input or "record" in user_input:
+            item, value, unit = handle_measurements()
+            # Save measurements to project details file
+            with open(f"Chat History/{project_name}_specs_{datetime.datetime.now().strftime('%Y-%m-%d')}.txt", "a") as f:
+                f.write(f"{item}: {value} {unit}\n")
+            continue
+        
+        # Process user's request and get AI response
+        messages.append({"role": "user", "content": user_input})
+        ai_response = send_to_chatgpt(messages)
+        SpeakText(ai_response)
+        save_chat_history(selected_project, user_input, ai_response)
+
+if __name__ == "__main__":
+    main()
